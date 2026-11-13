@@ -1,0 +1,10 @@
+{
+  "appId": "com.tahmid.studytracker",
+  "appName": "Study Tracker",
+  "webDir": "www",
+  "backgroundColor": "#f4fbf9",
+  "android": {
+    "allowMixedContent": false,
+    "adjustMarginsForEdgeToEdge": "force"
+  }
+}
