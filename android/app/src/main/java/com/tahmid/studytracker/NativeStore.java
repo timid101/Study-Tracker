@@ -113,21 +113,27 @@ final class NativeStore {
             cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, cal.get(Calendar.DAY_OF_MONTH));
     }
 
-    /** Returns {minutesStudied, targetMinutes} for a day key such as 2026-11-13. */
-    static int[] dayData(Context c, String key) {
-        SharedPreferences p = prefs(c);
-        int target = p.getInt("target", 240);
-        int minutes = 0;
+    /** The latest numbers sent by the app: date, target, total and per-subject minutes for that day. */
+    static JSONObject snap(Context c) {
         try {
-            JSONObject days = new JSONObject(p.getString("days", "{}"));
-            JSONObject d = days.optJSONObject(key);
-            if (d != null) {
-                minutes = d.optInt("m", 0);
-                target = d.optInt("t", target);
-            }
-        } catch (Exception ignored) {
+            return new JSONObject(prefs(c).getString("snap", "{}"));
+        } catch (Exception e) {
+            return new JSONObject();
         }
-        return new int[] { minutes, target };
+    }
+
+    /** True when the stored numbers belong to today; otherwise today's study time is 0 so far. */
+    static boolean snapIsToday(JSONObject s) {
+        return dayKey(0).equals(s.optString("date", ""));
+    }
+
+    static int targetMinutes(Context c) {
+        return Math.max(1, snap(c).optInt("target", 240));
+    }
+
+    static int todayTotal(Context c) {
+        JSONObject s = snap(c);
+        return snapIsToday(s) ? s.optInt("total", 0) : 0;
     }
 
     /* ---------- timer notification ---------- */
@@ -196,6 +202,19 @@ final class NativeStore {
         post(c, id, b.build());
     }
 
+    static void notifyTest(Context c) {
+        ensureChannels(c);
+        NotificationCompat.Builder b = new NotificationCompat.Builder(c, CH_REMIND)
+            .setSmallIcon(R.drawable.ic_stat_timer)
+            .setContentTitle("Study Tracker")
+            .setContentText("Notifications are working.")
+            .setContentIntent(openApp(c))
+            .setAutoCancel(true)
+            .setColor(0xFF006B5F)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT);
+        post(c, ID_REMIND + 1, b.build());
+    }
+
     /* ---------- daily reminders ---------- */
 
     private static PendingIntent reminderIntent(Context c, int index) {
@@ -262,9 +281,8 @@ final class NativeStore {
         if (index < 0 || index >= times.length) return;
         if (am != null) scheduleOneReminder(c, am, index, times[index]);
 
-        int[] d = dayData(c, dayKey(0));
-        int done = d[0];
-        int target = d[1];
+        int done = todayTotal(c);
+        int target = targetMinutes(c);
         if (done > 0 && done >= target) return; // Target already met today: stay quiet.
 
         String text = done == 0

@@ -26,6 +26,7 @@
     pause: svg('<rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/>', true),
     check: svg('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
     trash: svg('<path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/>'),
+    bell: svg('<path d="M6 17v-5.5a6 6 0 1 1 12 0V17l1.5 2h-15z"/><path d="M10 21.5h4"/>'),
     reset: svg('<path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4v4.5h4.5"/>')
   };
 
@@ -61,17 +62,31 @@
     var cap = window.Capacitor;
     if (cap && cap.isNativePlatform && cap.isNativePlatform()) NATIVE = cap.registerPlugin('StudyNative');
   } catch (e) { NATIVE = null; }
+  var link = { ok: null, err: '' };
+  function linkErr(e) {
+    link.ok = false; link.err = String((e && e.message) || e || 'unknown error').slice(0, 120);
+    if (tab === 'settings' && !sheetOpen) render();
+  }
   function nat(method, args) {
     if (!NATIVE) return Promise.resolve(null);
-    try { return Promise.resolve(NATIVE[method](args || {})).catch(function () { return null; }); }
-    catch (e) { return Promise.resolve(null); }
+    var p;
+    try { p = Promise.resolve(NATIVE[method](args || {})); } catch (e) { linkErr(e); return Promise.resolve(null); }
+    return p.then(function (r) { return r; }, function (e) { linkErr(e); return null; });
   }
-  var syncId = null;
-  function syncSoon() { if (!NATIVE) return; clearTimeout(syncId); syncId = setTimeout(syncData, 400); }
+  function linkText() {
+    if (!NATIVE) return 'Only in the Android app';
+    return link.ok === true ? 'Working' : link.ok === false ? 'Problem: ' + link.err : 'Checking\u2026';
+  }
+  function syncSoon() { syncData(); }
+  /* Sends today's numbers to Android right away so the widget and reminders match the app. */
   function syncData() {
-    var t = totals(), days = {};
-    lastDays(30).forEach(function (k) { days[k] = { m: Math.round(t[k] || 0), t: Math.round(targetFor(k)) }; });
-    nat('syncData', { days: days, target: Math.round(S.target) });
+    if (!NATIVE) return;
+    var tk = todayKey(), t = totals(), by = {};
+    S.sessions.forEach(function (x) { if (x.date === tk) by[x.subject] = (by[x.subject] || 0) + x.minutes; });
+    nat('syncData', {
+      date: tk, target: Math.round(targetFor(tk)), total: Math.round(t[tk] || 0),
+      subjects: S.subjects.map(function (b) { return { id: b.id, name: b.name, color: b.color, goal: Math.round(b.goal || 0), m: Math.round(by[b.id] || 0) }; })
+    });
   }
   function syncReminders() { nat('reminders', { enabled: !!S.set.remind, times: S.set.times.slice() }); }
   function syncTimer() {
@@ -307,7 +322,7 @@
     } else {
       h += '<ul class="list">' + S.subjects.map(function (s) {
         return '<li><button type="button" class="li" data-act="subj-edit" data-v="' + s.id + '"><span class="dot" style="--c:' + s.color + '"></span><div class="txt"><b>' + esc(s.name) +
-          '</b><small>' + esc(fmt(week[s.id] || 0)) + ' this week</small></div><span class="val num">' + esc(fmt(all[s.id] || 0)) + '</span></button></li>';
+          '</b><small>' + esc(fmt(week[s.id] || 0)) + ' this week' + (s.goal ? ' \u00b7 goal ' + esc(fmt(s.goal)) + ' a day' : '') + '</small></div><span class="val num">' + esc(fmt(all[s.id] || 0)) + '</span></button></li>';
       }).join('') + '</ul><div style="margin-top:12px"><button type="button" class="btn tonal" data-act="subj-new">' + I.plus + 'Add subject</button></div>';
     }
     return h + '</section>';
@@ -336,20 +351,20 @@
       '<div class="rowx"><div class="chips wrap">' + limits + '</div></div>' +
       '<div class="row"><div class="t"><b>Target reached alert</b><small>Tells you while the timer is running</small></div>' + sw('tgt-toggle', st.tgtAlert, 'Target reached alert') + '</div>' +
       '<div class="row"><div class="t"><b>Timer in notification bar</b><small>Live time while you study</small></div>' + sw('ongoing-toggle', st.ongoing, 'Timer in notification bar') + '</div>' +
-      '<div class="row"><div class="t"><b>Home screen widget</b><small>Study time for today, arrows for earlier days</small></div><button type="button" class="btn tonal" data-act="widget">Add</button></div></section>';
+      '<div class="row"><div class="t"><b>Home screen widget</b><small>Square. Tap its subject name to switch subject.</small></div><button type="button" class="btn tonal" data-act="widget">Add</button></div>' +
+      '<div class="row"><div class="t"><b>Link to Android</b><small>' + esc(linkText()) + '</small></div><button type="button" class="btn tonal" data-act="test-notif">Test</button></div></section>';
   }
   function viewSettings() {
-    return '<section class="card">' +
+    return alertsCard() + '<section class="card">' +
       '<div class="row"><div class="t"><b>Daily target</b><small>Applies from today</small></div><div class="stepper">' +
       '<button type="button" data-act="tgt-dec" aria-label="Decrease target by 15 minutes">' + I.minus + '</button><b class="num">' + esc(fmt(S.target)) + '</b>' +
       '<button type="button" data-act="tgt-inc" aria-label="Increase target by 15 minutes">' + I.plus + '</button></div></div>' +
       '<div class="row"><div class="t"><b>Week starts on</b></div>' + seg('wk', S.weekStart, [[6, 'Sat'], [0, 'Sun'], [1, 'Mon']]) + '</div>' +
       '<div class="row"><div class="t"><b>Theme</b></div>' + seg('theme', S.theme, [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']]) + '</div></section>' +
-      alertsCard() +
       '<section class="card"><h2 class="label">Your data</h2><p class="hint" style="margin:0 0 12px">Everything is stored on this phone only. Copy a backup to move it to another device.</p>' +
       '<div class="btn-row"><button type="button" class="btn tonal" data-act="backup">Backup &amp; restore</button>' +
       '<button type="button" class="btn text danger' + (pendingDel === 'reset' ? ' armed' : '') + '" data-act="reset">' + (pendingDel === 'reset' ? 'Tap again to erase everything' : 'Erase all data') + '</button></div></section>' +
-      '<p class="about">Study Tracker 1.1</p>';
+      '<p class="about">Study Tracker 1.2</p>';
   }
 
   function renderTop() {
@@ -357,10 +372,11 @@
       today: ['Today', d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })],
       stats: ['Stats', 'How your study time adds up'],
       subjects: ['Subjects', 'What you are studying'],
-      settings: ['Settings', 'Targets, theme and backup']
+      settings: ['Settings', 'Reminders, targets, theme and backup']
     }[tab];
     $('topbar').innerHTML = '<div class="titles"><h1>' + titles[0] + '</h1><p>' + esc(titles[1]) + '</p></div>' +
-      (tab === 'today' ? '<span class="streak" title="Days in a row with the target met">' + I.flame + '<span class="num">' + n + (n === 1 ? ' day' : ' days') + '</span></span>' : '');
+      (tab === 'today' ? '<button type="button" class="icon-btn" data-act="goto-rem" aria-label="Reminders and alerts">' + I.bell + '</button>' +
+        '<span class="streak" title="Days in a row with the target met">' + I.flame + '<span class="num">' + n + (n === 1 ? ' day' : ' days') + '</span></span>' : '');
   }
   function renderNav() {
     $('nav').innerHTML = TABS.map(function (x) {
@@ -460,26 +476,38 @@
   }
 
   function openSubject(id) {
-    var ex = id ? subj(id) : null, color = ex ? ex.color : COLORS[S.subjects.length % COLORS.length], armed = false;
+    var ex = id ? subj(id) : null, color = ex ? ex.color : COLORS[S.subjects.length % COLORS.length], armed = false, goal = ex ? (ex.goal || 0) : 0;
     showSheet('<h3>' + (ex ? 'Edit subject' : 'New subject') + '</h3><div class="field"><label for="sb-name">Name</label><input id="sb-name" type="text" maxlength="40" autocomplete="off" value="' + esc(ex ? ex.name : '') + '" placeholder="e.g. Fluid Mechanics"></div>' +
       '<div class="field"><label>Colour</label><div class="swatches" id="sb-sw">' + COLORS.map(function (c) {
         return '<button type="button" class="sw" style="--c:' + c + '" data-c="' + c + '" aria-label="Colour ' + c + '">' + I.check + '</button>';
-      }).join('') + '</div></div><p class="err" id="sb-err" role="alert"></p>' +
+      }).join('') + '</div></div>' +
+      '<div class="field"><label>Daily goal for this subject</label><div class="stepper" style="justify-content:space-between"><button type="button" id="sb-gm" aria-label="Decrease goal">' + I.minus + '</button><b class="num" id="sb-gv"></b><button type="button" id="sb-gp" aria-label="Increase goal">' + I.plus + '</button></div>' +
+      '<p class="hint" style="margin:6px 4px 0">The widget shows the percentage of this goal. At the daily target it uses your overall target.</p></div><p class="err" id="sb-err" role="alert"></p>' +
       '<button type="button" class="btn filled block" id="sb-save">' + I.check + 'Save</button>' +
-      (ex ? '<button type="button" class="btn text danger block" id="sb-del">Delete subject</button>' : ''));
+      (ex ? '<button type="button" class="btn tonal block" id="sb-widget">Add widget for this subject</button><button type="button" class="btn text danger block" id="sb-del">Delete subject</button>' : ''));
     var L = $('layer');
     function paint() { L.querySelectorAll('[data-c]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-c') === color)); }); }
     paint();
     L.querySelectorAll('[data-c]').forEach(function (b) { b.onclick = function () { color = b.getAttribute('data-c'); paint(); }; });
+    function paintGoal() { $('sb-gv').textContent = goal ? fmt(goal) : 'Daily target'; }
+    paintGoal();
+    $('sb-gp').onclick = function () { goal = goal === 0 ? 30 : Math.min(960, goal + 15); paintGoal(); };
+    $('sb-gm').onclick = function () { goal = goal <= 30 ? 0 : goal - 15; paintGoal(); };
+    if (ex) $('sb-widget').onclick = function () {
+      if (!NATIVE) { toast('The widget is available in the Android app.'); return; }
+      nat('requestWidget', { subjectId: ex.id }).then(function (r) {
+        toast(r && r.requested ? 'Confirm adding the widget to your home screen.' : 'Long-press your home screen, add the Study today widget, then tap its name to pick this subject.');
+      });
+    };
     $('sb-save').onclick = function () {
       var nm = $('sb-name').value.trim();
       if (!nm) { $('sb-err').textContent = 'Enter a name.'; return; }
       var dup = S.subjects.filter(function (s) { return s.name.toLowerCase() === nm.toLowerCase() && (!ex || s.id !== ex.id); })[0];
       if (dup) { $('sb-err').textContent = 'You already have a subject with that name.'; return; }
       if (ex) {
-        ex.name = nm; ex.color = color;
+        ex.name = nm; ex.color = color; ex.goal = goal;
         S.sessions.forEach(function (s) { if (s.subject === ex.id) s.subjectName = nm; });
-      } else S.subjects.push({ id: uid(), name: nm, color: color });
+      } else S.subjects.push({ id: uid(), name: nm, color: color, goal: goal });
       save(); closeSheet(); render();
     };
     if (ex) $('sb-del').onclick = function () {
@@ -534,6 +562,8 @@
     var a = el.getAttribute('data-act'), v = el.getAttribute('data-v'), T = S.timer;
     if (a === 'tab') { clearPending(); tab = v; render(false); var vw = $('view'); vw.scrollTop = 0; for (var q = 0; q < vw.children.length; q++) vw.children[q].classList.add('fade'); return; }
     if (a === 'close') { closeSheet(); return; }
+    if (a === 'goto-rem') { clearPending(); tab = 'settings'; render(false); var sv = $('view'); sv.scrollTop = 0; for (var z = 0; z < sv.children.length; z++) sv.children[z].classList.add('fade'); return; }
+    if (a === 'test-notif') { needNotif(function () { nat('testNotify').then(function () { toast('Test notification sent'); }); }); return; }
     if (a === 'log') { openLog(); return; }
     if (a === 'subj-new') { openSubject(null); return; }
     if (a === 'subj-edit') { openSubject(v); return; }
@@ -580,7 +610,7 @@
     }
     if (a === 'widget') {
       if (!NATIVE) { toast('The widget is available in the Android app.'); return; }
-      nat('requestWidget').then(function (r) {
+      nat('requestWidget', { subjectId: 'all' }).then(function (r) {
         toast(r && r.requested ? 'Confirm adding the widget to your home screen.' : 'Long-press your home screen, tap Widgets, then choose Study today.');
       });
       return;
@@ -595,9 +625,9 @@
     var el = $('timer-text');
     if (el) el.textContent = clock(elapsed());
     var k = todayKey();
-    if (k !== lastDay) { lastDay = k; if (!sheetOpen) render(); }
+    if (k !== lastDay) { lastDay = k; syncData(); if (!sheetOpen) render(); }
   }
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
+  document.addEventListener('visibilitychange', function () { if (document.hidden) syncData(); else tick(); });
 
   S = load();
   lastDay = todayKey();
@@ -605,4 +635,8 @@
   render(false);
   setInterval(tick, 1000);
   syncData(); syncReminders(); syncTimer();
+  nat('ping').then(function (r) {
+    if (r && r.ok) { link.ok = true; link.err = ''; } else if (NATIVE && link.ok === null) { link.ok = false; link.err = 'No answer from Android'; }
+    if (tab === 'settings' && !sheetOpen) render();
+  });
 })();

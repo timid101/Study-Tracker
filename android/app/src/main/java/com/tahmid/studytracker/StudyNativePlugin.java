@@ -4,7 +4,6 @@ import android.Manifest;
 import android.appwidget.AppWidgetManager;
 import android.content.ComponentName;
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.os.Build;
 
 import com.getcapacitor.JSArray;
@@ -22,6 +21,20 @@ import com.getcapacitor.annotation.PermissionCallback;
     permissions = { @Permission(strings = { Manifest.permission.POST_NOTIFICATIONS }, alias = "notifications") }
 )
 public class StudyNativePlugin extends Plugin {
+
+    /** Lets the app confirm the link to Android works. */
+    @PluginMethod
+    public void ping(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("ok", true);
+        call.resolve(r);
+    }
+
+    @PluginMethod
+    public void testNotify(PluginCall call) {
+        NativeStore.notifyTest(getContext());
+        call.resolve();
+    }
 
     @PluginMethod
     public void notifPermission(PluginCall call) {
@@ -44,15 +57,10 @@ public class StudyNativePlugin extends Plugin {
         notifPermission(call);
     }
 
-    /** Saves the last days of study totals so the widget can show them without opening the app. */
+    /** Saves today's numbers (target, total, per-subject minutes and colours) for the widget and reminders. */
     @PluginMethod
     public void syncData(PluginCall call) {
-        JSObject days = call.getObject("days");
-        int target = call.getData().optInt("target", 240);
-        SharedPreferences.Editor e = NativeStore.prefs(getContext()).edit();
-        if (days != null) e.putString("days", days.toString());
-        e.putInt("target", target);
-        e.apply();
+        NativeStore.prefs(getContext()).edit().putString("snap", call.getData().toString()).apply();
         StudyWidgetProvider.updateAll(getContext());
         call.resolve();
     }
@@ -113,16 +121,20 @@ public class StudyNativePlugin extends Plugin {
         call.resolve();
     }
 
+    /** Asks the launcher to add a widget. subjectId picks what the new widget shows ("all" or a subject id). */
     @PluginMethod
     public void requestWidget(PluginCall call) {
-        boolean requested = false;
         Context c = getContext();
+        String subjectId = call.getData().optString("subjectId", "all");
+        NativeStore.prefs(c).edit().putString("wpending", subjectId).apply();
+        boolean requested = false;
         if (Build.VERSION.SDK_INT >= 26) {
             AppWidgetManager m = AppWidgetManager.getInstance(c);
             if (m != null && m.isRequestPinAppWidgetSupported()) {
                 requested = m.requestPinAppWidget(new ComponentName(c, StudyWidgetProvider.class), null, null);
             }
         }
+        if (!requested) NativeStore.prefs(c).edit().remove("wpending").apply();
         JSObject r = new JSObject();
         r.put("requested", requested);
         call.resolve(r);
