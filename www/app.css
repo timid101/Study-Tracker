@@ -250,3 +250,13 @@ nav.bar button[aria-current="page"] .pill { background: var(--sec-c); color: var
 
 @media (max-width: 359px) { .ring { width: 132px; height: 132px; } .ring svg { width: 132px; height: 132px; } .clock { font-size: 34px; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* Switches and settings groups */
+.switch { position: relative; width: 52px; height: 32px; border-radius: 16px; border: 2px solid var(--outline); background: var(--sc-high); flex: none; transition: background 0.2s, border-color 0.2s; }
+.switch i { position: absolute; top: 50%; left: 6px; width: 16px; height: 16px; margin-top: -8px; border-radius: 50%; background: var(--outline); transition: left 0.2s, width 0.2s, height 0.2s, margin-top 0.2s, background 0.2s; }
+.switch[aria-checked="true"] { background: var(--pri); border-color: var(--pri); }
+.switch[aria-checked="true"] i { left: 20px; width: 24px; height: 24px; margin-top: -12px; background: var(--on-pri); }
+.rowx { padding: 0 0 14px; }
+.rowx + .row { border-top: 1px solid var(--outline-v); }
+.row + .rowx { margin-top: -2px; }
+.row .t { min-width: 0; }

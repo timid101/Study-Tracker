@@ -4,4 +4,5 @@
     <string name="title_activity_main">Study Tracker</string>
     <string name="package_name">com.tahmid.studytracker</string>
     <string name="custom_url_scheme">com.tahmid.studytracker</string>
+    <string name="widget_desc">Shows how much you studied today or on an earlier day.</string>
 </resources>

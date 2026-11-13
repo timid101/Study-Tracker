@@ -55,10 +55,57 @@
   function buzz(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} }
   function $(id) { return document.getElementById(id); }
 
+  /* ---------- Android bridge: notifications, alarms, widget. Everything stays on the phone. ---------- */
+  var NATIVE = null;
+  try {
+    var cap = window.Capacitor;
+    if (cap && cap.isNativePlatform && cap.isNativePlatform()) NATIVE = cap.registerPlugin('StudyNative');
+  } catch (e) { NATIVE = null; }
+  function nat(method, args) {
+    if (!NATIVE) return Promise.resolve(null);
+    try { return Promise.resolve(NATIVE[method](args || {})).catch(function () { return null; }); }
+    catch (e) { return Promise.resolve(null); }
+  }
+  var syncId = null;
+  function syncSoon() { if (!NATIVE) return; clearTimeout(syncId); syncId = setTimeout(syncData, 400); }
+  function syncData() {
+    var t = totals(), days = {};
+    lastDays(30).forEach(function (k) { days[k] = { m: Math.round(t[k] || 0), t: Math.round(targetFor(k)) }; });
+    nat('syncData', { days: days, target: Math.round(S.target) });
+  }
+  function syncReminders() { nat('reminders', { enabled: !!S.set.remind, times: S.set.times.slice() }); }
+  function syncTimer() {
+    if (!NATIVE) return;
+    var T = S.timer, ms = elapsed(), sb = subj(T.subject), name = sb ? sb.name : 'Study session';
+    if ((T.startedAt || ms > 0) && S.set.ongoing) {
+      nat('timerNotify', { running: !!T.startedAt, startedAt: Math.round(Date.now() - ms), elapsedMs: Math.round(ms), subject: name });
+    } else nat('timerClear');
+    var limitAt = 0, targetAt = 0, now = Date.now();
+    if (T.startedAt) {
+      if (S.set.limit > 0) { var r1 = S.set.limit * 60000 - ms; if (r1 > 0) limitAt = Math.round(now + r1); }
+      if (S.set.tgtAlert) {
+        var tk = todayKey(), done = totals()[tk] || 0, r2 = (targetFor(tk) - done) * 60000 - ms;
+        if (r2 > 0) targetAt = Math.round(now + r2);
+      }
+    }
+    nat('timerAlerts', { limitAt: limitAt, targetAt: targetAt, subject: name, limitMin: S.set.limit });
+  }
+  function needNotif(then) {
+    if (!NATIVE) { toast('This works in the Android app.'); return; }
+    nat('requestNotifPermission').then(function (r) {
+      if (r && r.granted) then(); else toast('Notifications are blocked. Allow them in Android settings.');
+    });
+  }
+  function fmtClock12(hm) {
+    var p = hm.split(':'), h = +p[0];
+    return ((h + 11) % 12 + 1) + ':' + p[1] + ' ' + (h < 12 ? 'am' : 'pm');
+  }
+
   /* ---------- state ---------- */
   function fresh() {
     return { v: 1, target: 240, dayTargets: {}, installed: todayKey(), weekStart: 6, theme: 'auto',
-      subjects: [], sessions: [], timer: { subject: null, startedAt: null, accum: 0 } };
+      subjects: [], sessions: [], timer: { subject: null, startedAt: null, accum: 0 },
+      set: { remind: false, times: ['20:00'], limit: 0, tgtAlert: true, ongoing: true } };
   }
   function load() {
     try {
@@ -66,12 +113,13 @@
       if (o && o.v === 1 && Array.isArray(o.sessions) && Array.isArray(o.subjects)) {
         var f = fresh();
         for (var k in f) if (o[k] == null) o[k] = f[k];
+        o.set = Object.assign({}, f.set, o.set);
         return o;
       }
     } catch (e) {}
     return fresh();
   }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} syncSoon(); }
 
   function targetFor(k) { return S.dayTargets[k] != null ? S.dayTargets[k] : S.target; }
   function totals() { var t = {}; S.sessions.forEach(function (s) { t[s.date] = (t[s.date] || 0) + s.minutes; }); return t; }
@@ -271,6 +319,25 @@
     }).join('') + '</div>';
   }
 
+  function sw(act, on, label) {
+    return '<button type="button" class="switch" role="switch" aria-checked="' + (!!on) + '" aria-label="' + label + '" data-act="' + act + '"><i></i></button>';
+  }
+  function alertsCard() {
+    var st = S.set, times = st.remind ? '<div class="rowx"><div class="chips wrap">' + st.times.map(function (t, i) {
+      return '<button type="button" class="chip on" data-act="rem-del" data-v="' + i + '" aria-label="Remove reminder at ' + fmtClock12(t) + '">' + fmtClock12(t) + ' &times;</button>';
+    }).join('') + (st.times.length < 4 ? '<button type="button" class="chip" data-act="rem-add">' + I.plus.replace('<svg', '<svg width="16" height="16"') + 'Add time</button>' : '') + '</div></div>' : '';
+    var limits = [[0, 'Off'], [25, '25 min'], [30, '30 min'], [45, '45 min'], [60, '1 hour'], [90, '90 min']].map(function (o) {
+      return '<button type="button" class="chip" data-act="limit" data-v="' + o[0] + '" aria-pressed="' + (st.limit === o[0]) + '">' + o[1] + '</button>';
+    }).join('');
+    return '<section class="card"><h2 class="label">Reminders and alerts</h2>' +
+      (NATIVE ? '' : '<p class="hint" style="margin:0 0 8px">These work in the Android app.</p>') +
+      '<div class="row"><div class="t"><b>Study reminders</b><small>Daily. Skipped once your target is met.</small></div>' + sw('rem-toggle', st.remind, 'Study reminders') + '</div>' + times +
+      '<div class="row"><div class="t"><b>Session limit</b><small>Alert when one timer run reaches this</small></div></div>' +
+      '<div class="rowx"><div class="chips wrap">' + limits + '</div></div>' +
+      '<div class="row"><div class="t"><b>Target reached alert</b><small>Tells you while the timer is running</small></div>' + sw('tgt-toggle', st.tgtAlert, 'Target reached alert') + '</div>' +
+      '<div class="row"><div class="t"><b>Timer in notification bar</b><small>Live time while you study</small></div>' + sw('ongoing-toggle', st.ongoing, 'Timer in notification bar') + '</div>' +
+      '<div class="row"><div class="t"><b>Home screen widget</b><small>Study time for today, arrows for earlier days</small></div><button type="button" class="btn tonal" data-act="widget">Add</button></div></section>';
+  }
   function viewSettings() {
     return '<section class="card">' +
       '<div class="row"><div class="t"><b>Daily target</b><small>Applies from today</small></div><div class="stepper">' +
@@ -278,10 +345,11 @@
       '<button type="button" data-act="tgt-inc" aria-label="Increase target by 15 minutes">' + I.plus + '</button></div></div>' +
       '<div class="row"><div class="t"><b>Week starts on</b></div>' + seg('wk', S.weekStart, [[6, 'Sat'], [0, 'Sun'], [1, 'Mon']]) + '</div>' +
       '<div class="row"><div class="t"><b>Theme</b></div>' + seg('theme', S.theme, [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']]) + '</div></section>' +
+      alertsCard() +
       '<section class="card"><h2 class="label">Your data</h2><p class="hint" style="margin:0 0 12px">Everything is stored on this phone only. Copy a backup to move it to another device.</p>' +
       '<div class="btn-row"><button type="button" class="btn tonal" data-act="backup">Backup &amp; restore</button>' +
       '<button type="button" class="btn text danger' + (pendingDel === 'reset' ? ' armed' : '') + '" data-act="reset">' + (pendingDel === 'reset' ? 'Tap again to erase everything' : 'Erase all data') + '</button></div></section>' +
-      '<p class="about">Study Tracker 1.0</p>';
+      '<p class="about">Study Tracker 1.1</p>';
   }
 
   function renderTop() {
@@ -418,7 +486,18 @@
       if (!armed) { armed = true; this.textContent = 'Tap again to delete. Past sessions are kept.'; this.classList.add('armed'); return; }
       S.subjects = S.subjects.filter(function (s) { return s.id !== ex.id; });
       if (S.timer.subject === ex.id) S.timer.subject = null;
-      save(); closeSheet(); render(); toast('Subject deleted');
+      save(); closeSheet(); render(); syncTimer(); toast('Subject deleted');
+    };
+  }
+
+  function openReminderTime() {
+    showSheet('<h3>Add reminder</h3><div class="field"><label for="rm-time">Time</label><input id="rm-time" type="time" value="20:00"></div>' +
+      '<p class="err" id="rm-err" role="alert"></p><button type="button" class="btn filled block" id="rm-save">' + I.check + 'Add reminder</button>');
+    $('rm-save').onclick = function () {
+      var v = $('rm-time').value;
+      if (!/^\d\d:\d\d$/.test(v)) { $('rm-err').textContent = 'Choose a time.'; return; }
+      if (S.set.times.indexOf(v) >= 0) { $('rm-err').textContent = 'You already have a reminder at that time.'; return; }
+      S.set.times.push(v); S.set.times.sort(); save(); syncReminders(); closeSheet(); render();
     };
   }
 
@@ -439,7 +518,8 @@
         var o = JSON.parse(ta.value);
         if (!o || o.v !== 1 || !Array.isArray(o.sessions) || !Array.isArray(o.subjects)) throw 0;
         var f = fresh(); for (var k in f) if (o[k] == null) o[k] = f[k];
-        S = o; save(); closeSheet(); render(); toast('Backup restored');
+        o.set = Object.assign({}, f.set, o.set);
+        S = o; save(); closeSheet(); render(); syncReminders(); syncTimer(); toast('Backup restored');
       } catch (e) { $('bk-err').textContent = 'That text is not a valid Study Tracker backup.'; }
     };
   }
@@ -458,18 +538,18 @@
     if (a === 'subj-new') { openSubject(null); return; }
     if (a === 'subj-edit') { openSubject(v); return; }
     if (a === 'backup') { openBackup(); return; }
-    if (a === 't-subj') { T.subject = v; save(); render(); return; }
+    if (a === 't-subj') { T.subject = v; save(); render(); syncTimer(); return; }
     if (a === 't-start') {
       if (!T.subject) { T.subject = S.subjects[0].id; }
-      T.startedAt = Date.now(); save(); buzz(10); render(); return;
+      T.startedAt = Date.now(); save(); buzz(10); render(); syncTimer(); return;
     }
-    if (a === 't-pause') { T.accum = elapsed(); T.startedAt = null; save(); render(); return; }
-    if (a === 't-reset') { T.accum = 0; T.startedAt = null; save(); render(); return; }
+    if (a === 't-pause') { T.accum = elapsed(); T.startedAt = null; save(); render(); syncTimer(); return; }
+    if (a === 't-reset') { T.accum = 0; T.startedAt = null; save(); render(); syncTimer(); return; }
     if (a === 't-save') {
       var mins = Math.round(elapsed() / 60000);
       if (mins < 1 || !T.subject) return;
       var sid = T.subject; T.accum = 0; T.startedAt = null; save();
-      addSession(todayKey(), sid, mins, 'Focus timer'); return;
+      addSession(todayKey(), sid, mins, 'Focus timer'); syncTimer(); return;
     }
     if (a === 's-del') {
       if (pendingDel === v) { clearPending(); S.sessions = S.sessions.filter(function (s) { return s.id !== v; }); save(); render(); toast('Session deleted'); }
@@ -480,8 +560,33 @@
     if (a === 'tgt-inc') { setTarget(S.target + 15); return; }
     if (a === 'theme') { S.theme = v; save(); render(); return; }
     if (a === 'wk') { S.weekStart = +v; save(); render(); return; }
+    if (a === 'rem-toggle') {
+      if (S.set.remind) { S.set.remind = false; save(); syncReminders(); render(); }
+      else needNotif(function () { S.set.remind = true; save(); syncReminders(); render(); });
+      return;
+    }
+    if (a === 'rem-add') { if (S.set.times.length >= 4) toast('You can set up to 4 reminders.'); else openReminderTime(); return; }
+    if (a === 'rem-del') { S.set.times.splice(+v, 1); save(); syncReminders(); render(); return; }
+    if (a === 'limit') {
+      var apply = function () { S.set.limit = +v; save(); render(); syncTimer(); };
+      if (+v > 0) needNotif(apply); else apply();
+      return;
+    }
+    if (a === 'tgt-toggle' || a === 'ongoing-toggle') {
+      var fld = a === 'tgt-toggle' ? 'tgtAlert' : 'ongoing';
+      var flip = function () { S.set[fld] = !S.set[fld]; save(); render(); syncTimer(); };
+      if (!S.set[fld]) needNotif(flip); else flip();
+      return;
+    }
+    if (a === 'widget') {
+      if (!NATIVE) { toast('The widget is available in the Android app.'); return; }
+      nat('requestWidget').then(function (r) {
+        toast(r && r.requested ? 'Confirm adding the widget to your home screen.' : 'Long-press your home screen, tap Widgets, then choose Study today.');
+      });
+      return;
+    }
     if (a === 'reset') {
-      if (pendingDel === 'reset') { clearPending(); S = fresh(); save(); render(); toast('All data erased'); }
+      if (pendingDel === 'reset') { clearPending(); S = fresh(); save(); render(); syncReminders(); syncTimer(); toast('All data erased'); }
       else arm('reset');
     }
   });
@@ -499,4 +604,5 @@
   applyTheme();
   render(false);
   setInterval(tick, 1000);
+  syncData(); syncReminders(); syncTimer();
 })();
